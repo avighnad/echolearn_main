@@ -1,0 +1,12 @@
+streamlit==1.47.1 
+PyMuPDF==1.24.13 
+langchain==0.3.26 
+langchain-core==0.3.66 
+openai==1.93.0 
+python-dotenv==1.1.1
+pyttsx3==2.98 
+sounddevice==0.5.2
+numpy==2.3.1 
+scipy==1.15.0 
+speechrecognition==3.14.3
+requests==2.32.4
