@@ -1,4 +1,6 @@
 altair==5.5.0
+PyMuPDF
+PyPDF2
 annotated-types==0.7.0
 anyio==4.9.0
 attrs==25.3.0
@@ -73,6 +75,7 @@ tzdata==2025.2
 urllib3==2.5.0
 watchdog==6.0.0
 zstandard==0.23.0
+
 
 
 
