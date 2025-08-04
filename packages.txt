@@ -1,1 +1,8 @@
 libmupdf-dev
+libasound-dev
+espeak
+libespeak-dev
+build-essential
+gcc
+g++
+python3-dev
