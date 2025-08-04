@@ -22,11 +22,13 @@ idna==3.10
 Jinja2==3.1.6
 jiter==0.10.0
 jsonpatch==1.33
+sounddevice==0.5.2
 jsonpointer==3.0.0
 jsonschema==4.24.0
 jsonschema-specifications==2025.4.1
 langchain==0.3.26
 langchain-core==0.3.66
+pyttsx3==2.98
 langchain-groq==0.3.4
 langchain-openai==0.3.27
 langchain-text-splitters==0.3.8
