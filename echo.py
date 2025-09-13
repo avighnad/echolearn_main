@@ -10,12 +10,23 @@ import numpy as np
 import scipy.io.wavfile as wav
 import speech_recognition as sr
 import time
+from auth import auth_manager
+from database import db_manager
 
 # ------------------ Load API & Init Model ------------------
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
 llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
+
+# ------------------ Authentication Check ------------------
+auth_manager.require_authentication()
+
+# Show user profile in sidebar
+auth_manager.show_user_profile_sidebar()
+
+# Get current user
+current_user = auth_manager.get_current_user()
 
 st.title("📘 Echolearn - Viva Question Evaluator")
 
@@ -30,12 +41,51 @@ if "qa_index" not in st.session_state:
     st.session_state.qa_index = 0
 if "used_q_indices" not in st.session_state:
     st.session_state.used_q_indices = []
+if "current_conversation_id" not in st.session_state:
+    st.session_state.current_conversation_id = None
+if "resume_session" not in st.session_state:
+    st.session_state.resume_session = False
 
-# ------------------ Input Fields ------------------
-name = st.text_input("Name : ")
-grade = st.text_input("Grade : ")
-subject = st.text_input("Subject : ")
-book_title = st.text_input("Book Title : ")
+# ------------------ Check for Resume Session ------------------
+if st.session_state.resume_session and st.session_state.current_conversation_id:
+    # Load conversation data
+    conversations = db_manager.get_user_conversations(current_user['id'])
+    current_conv = next((c for c in conversations if c['id'] == st.session_state.current_conversation_id), None)
+    
+    if current_conv:
+        st.info(f"🔄 Resuming session: {current_conv['subject']} - {current_conv['book_title']}")
+        
+        # Load conversation details
+        name = current_conv['name']
+        grade = current_conv['grade']
+        subject = current_conv['subject']
+        book_title = current_conv['book_title']
+        
+        # Load questions and answers
+        questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+        st.session_state.all_qas = questions
+        
+        # Set current question index to first unanswered question
+        answered_indices = [i for i, q in enumerate(questions) if q['score'] is not None]
+        st.session_state.used_q_indices = answered_indices
+        
+        # Find next unanswered question
+        next_unanswered = next((i for i, q in enumerate(questions) if q['score'] is None), 0)
+        st.session_state.qa_index = next_unanswered
+        
+        st.session_state.resume_session = False
+    
+    # Skip input fields when resuming
+else:
+    # ------------------ Show User Dashboard ------------------
+    auth_manager.show_user_dashboard()
+    
+    # ------------------ Input Fields ------------------
+    st.subheader("📝 Start New Study Session")
+    name = st.text_input("Name : ", value=current_user.get('full_name', current_user['username']))
+    grade = st.text_input("Grade : ")
+    subject = st.text_input("Subject : ")
+    book_title = st.text_input("Book Title : ")
 
 # ------------------ PDF Upload ------------------
 st.header("Upload the Book's PDF")
@@ -51,6 +101,23 @@ if book_pdf_file is not None:
             st.session_state.pdf_text_dict[i + 1] = text
 
     st.success("✅ PDF uploaded and text extracted.")
+    
+    # Create new conversation in database
+    if not st.session_state.current_conversation_id and name and grade and subject and book_title:
+        try:
+            pdf_content = "\n\n".join(st.session_state.pdf_text_dict.values())
+            conversation_id = db_manager.create_conversation(
+                user_id=current_user['id'],
+                name=name,
+                grade=grade,
+                subject=subject,
+                book_title=book_title,
+                pdf_content=pdf_content
+            )
+            st.session_state.current_conversation_id = conversation_id
+            st.success(f"📚 Study session created and saved!")
+        except Exception as e:
+            st.error(f"Error creating study session: {str(e)}")
 
 # ------------------ Page Viewer ------------------
 if st.session_state.pdf_text_dict:
@@ -136,7 +203,16 @@ A11: ...
         st.session_state.all_qas = all_qas
         st.session_state.qa_index = 0
         st.session_state.used_q_indices = []
-        st.success("✅ Viva questions generated.")
+        
+        # Save questions to database
+        if st.session_state.current_conversation_id:
+            success = db_manager.save_questions(st.session_state.current_conversation_id, all_qas)
+            if success:
+                st.success("✅ Viva questions generated and saved to database.")
+            else:
+                st.warning("✅ Viva questions generated but couldn't save to database.")
+        else:
+            st.success("✅ Viva questions generated.")
 
 # ------------------ Answer Evaluation ------------------
 def evaluate_answer(question, correct_answer, user_answer):
@@ -247,6 +323,24 @@ if st.session_state.all_qas:
                 st.session_state.all_qas[current]["user_answer"] = text
                 st.success("✅ Transcription Successful")
                 st.text_area("Your Answer (from audio)", value=text, key=f"audio_text_{current}")
+                
+                # Auto-evaluate and save audio answer
+                score = evaluate_answer(qa["question"], qa["answer"], text)
+                st.session_state.all_qas[current]["score"] = score
+                
+                # Save to database
+                if st.session_state.current_conversation_id:
+                    questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+                    if current < len(questions):
+                        question_id = questions[current]['id']
+                        db_manager.save_user_answer(question_id, text, score, answer_method='audio')
+                        db_manager.update_user_progress(current_user['id'], subject)
+                
+                # Add to used indices
+                if current not in st.session_state.used_q_indices:
+                    st.session_state.used_q_indices.append(current)
+                
+                st.success(f"🎙️ Audio answer scored: {score}/10")
 
         except Exception as e:
             st.error(f"❌ Error during recording/transcription: {e}")
@@ -259,14 +353,48 @@ if st.session_state.all_qas:
         score = evaluate_answer(qa["question"], qa["answer"], manual_answer)
         st.session_state.all_qas[current]["score"] = score
         
+        # Save answer to database
+        if st.session_state.current_conversation_id:
+            # Get question ID from database
+            questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+            if current < len(questions):
+                question_id = questions[current]['id']
+                db_manager.save_user_answer(question_id, manual_answer, score, answer_method='text')
+                
+                # Update user progress
+                db_manager.update_user_progress(current_user['id'], subject)
+        
         # Only add to used indices if not already added
         if current not in st.session_state.used_q_indices:
             st.session_state.used_q_indices.append(current)
             
         st.success(f"✅ Answer saved and scored: {score}/10")
         time.sleep(1)  # Short delay to allow user to see the message
-        # Only run adaptive selection if not all questions are answered
-        if len(st.session_state.used_q_indices) < len(st.session_state.all_qas):
+        
+        # Check if session is complete
+        if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
+            # Mark conversation as completed
+            if st.session_state.current_conversation_id:
+                try:
+                    import sqlite3
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE conversations 
+                            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (st.session_state.current_conversation_id,))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Error marking conversation complete: {e}")
+            
+            st.info("✅ All questions completed.")
+            total_score = sum(q['score'] for q in st.session_state.all_qas)
+            max_score = 10 * len(st.session_state.all_qas)
+            st.balloons()
+            st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
+        else:
+            # Only run adaptive selection if not all questions are answered
             # Preserve the current index for manual navigation
             current_index_before_adaptive = st.session_state.qa_index
             
@@ -279,12 +407,6 @@ if st.session_state.all_qas:
                 st.rerun()  # ADDED THIS LINE TO FORCE REFRESH
             else:
                 st.warning("⚠️ Couldn't find a suitable next question. Please use navigation buttons.")
-        else:
-            st.info("✅ All questions completed.")
-            total_score = sum(q['score'] for q in st.session_state.all_qas)
-            max_score = 10 * len(st.session_state.all_qas)
-            st.balloons()
-            st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
 # ------------------ Save Report ------------------
 def save_qa_to_text_file(name, grade, subject, book_title, all_qas):
     output = io.StringIO()
@@ -306,10 +428,42 @@ if st.session_state.all_qas:
     st.subheader("📄 Download Q&A + Scores")
 
     if st.button("📥 Generate Report"):
-        file_content = save_qa_to_text_file(name, grade, subject, book_title, st.session_state.all_qas)
+        # Get current values or use saved values
+        report_name = name if 'name' in locals() else current_user.get('full_name', current_user['username'])
+        report_grade = grade if 'grade' in locals() else 'N/A'
+        report_subject = subject if 'subject' in locals() else 'N/A'
+        report_book_title = book_title if 'book_title' in locals() else 'N/A'
+        
+        file_content = save_qa_to_text_file(report_name, report_grade, report_subject, report_book_title, st.session_state.all_qas)
         st.download_button(
             label="Download as Text File",
             data=file_content,
-            file_name="viva_evaluation_report.txt",
+            file_name=f"viva_evaluation_report_{current_user['username']}_{int(time.time())}.txt",
             mime="text/plain"
         )
+        
+    # Show session statistics
+    if st.session_state.current_conversation_id:
+        st.subheader("📊 Session Statistics")
+        
+        total_questions = len(st.session_state.all_qas)
+        answered_questions = len(st.session_state.used_q_indices)
+        total_score = sum(q.get('score', 0) for q in st.session_state.all_qas if q.get('score') is not None)
+        max_score = answered_questions * 10
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Total Questions", total_questions)
+        col2.metric("Answered", answered_questions)
+        col3.metric("Score", f"{total_score}/{max_score}")
+        if answered_questions > 0:
+            col4.metric("Average Score", f"{total_score/answered_questions:.1f}/10")
+        else:
+            col4.metric("Average Score", "0/10")
+    
+    # Add option to start new session
+    if st.button("🆕 Start New Session"):
+        # Clear session state
+        for key in ['current_conversation_id', 'pdf_text_dict', 'qa_dict', 'all_qas', 'qa_index', 'used_q_indices', 'resume_session']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
