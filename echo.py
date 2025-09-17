@@ -45,15 +45,21 @@ if "current_conversation_id" not in st.session_state:
     st.session_state.current_conversation_id = None
 if "resume_session" not in st.session_state:
     st.session_state.resume_session = False
+if "question_mode" not in st.session_state:
+    st.session_state.question_mode = "PDF Upload"
+if "current_predefined_session_id" not in st.session_state:
+    st.session_state.current_predefined_session_id = None
+if "resume_predefined_session" not in st.session_state:
+    st.session_state.resume_predefined_session = False
 
 # ------------------ Check for Resume Session ------------------
 if st.session_state.resume_session and st.session_state.current_conversation_id:
-    # Load conversation data
+    # Load PDF-based conversation data
     conversations = db_manager.get_user_conversations(current_user['id'])
     current_conv = next((c for c in conversations if c['id'] == st.session_state.current_conversation_id), None)
     
     if current_conv:
-        st.info(f"🔄 Resuming session: {current_conv['subject']} - {current_conv['book_title']}")
+        st.info(f"🔄 Resuming PDF session: {current_conv['subject']} - {current_conv['book_title']}")
         
         # Load conversation details
         name = current_conv['name']
@@ -74,62 +80,161 @@ if st.session_state.resume_session and st.session_state.current_conversation_id:
         st.session_state.qa_index = next_unanswered
         
         st.session_state.resume_session = False
+        st.session_state.question_mode = "PDF Upload"
+    
+    # Skip input fields when resuming
+elif st.session_state.resume_predefined_session and st.session_state.current_predefined_session_id:
+    # Load predefined question session data
+    session_info, questions = db_manager.get_predefined_session_questions(st.session_state.current_predefined_session_id)
+    
+    if session_info:
+        st.info(f"🔄 Resuming predefined session: {session_info['subject_name']} - {session_info.get('topic_name', 'All Topics')}")
+        
+        # Load session details
+        name = session_info['name']
+        grade = session_info['grade']
+        subject = session_info['subject_name']
+        book_title = f"Predefined Questions - {session_info['subject_name']}"
+        
+        # Convert predefined questions to the format expected by the UI
+        st.session_state.all_qas = questions
+        
+        # Set current question index to first unanswered question
+        answered_indices = [i for i, q in enumerate(questions) if q['score'] is not None]
+        st.session_state.used_q_indices = answered_indices
+        
+        # Find next unanswered question
+        next_unanswered = next((i for i, q in enumerate(questions) if q['score'] is None), 0)
+        st.session_state.qa_index = next_unanswered
+        
+        st.session_state.resume_predefined_session = False
+        st.session_state.question_mode = "Predefined Questions"
     
     # Skip input fields when resuming
 else:
     # ------------------ Show User Dashboard ------------------
     auth_manager.show_user_dashboard()
     
+    # ------------------ Question Mode Selection ------------------
+    st.subheader("📚 Choose Learning Mode")
+    question_mode = st.radio(
+        "Select how you want to practice:",
+        ["PDF Upload", "Predefined Questions"],
+        index=0 if st.session_state.question_mode == "PDF Upload" else 1,
+        horizontal=True,
+        help="PDF Upload: Generate questions from your own textbook. Predefined Questions: Practice with curated questions from our question bank."
+    )
+    
+    st.session_state.question_mode = question_mode
+    
     # ------------------ Input Fields ------------------
     st.subheader("📝 Start New Study Session")
     name = st.text_input("Name : ", value=current_user.get('full_name', current_user['username']))
-    grade = st.text_input("Grade : ")
-    subject = st.text_input("Subject : ")
-    book_title = st.text_input("Book Title : ")
-
-# ------------------ PDF Upload ------------------
-st.header("Upload the Book's PDF")
-book_pdf_file = st.file_uploader("Choose a PDF", type="pdf")
-
-if book_pdf_file is not None:
-    doc = fitz.open(stream=book_pdf_file.read(), filetype="pdf")
-    st.session_state.pdf_text_dict.clear()
-
-    for i, page in enumerate(doc):
-        text = page.get_text().strip()
-        if text:
-            st.session_state.pdf_text_dict[i + 1] = text
-
-    st.success("✅ PDF uploaded and text extracted.")
     
-    # Create new conversation in database
-    if not st.session_state.current_conversation_id and name and grade and subject and book_title:
-        try:
-            pdf_content = "\n\n".join(st.session_state.pdf_text_dict.values())
-            conversation_id = db_manager.create_conversation(
-                user_id=current_user['id'],
-                name=name,
-                grade=grade,
-                subject=subject,
-                book_title=book_title,
-                pdf_content=pdf_content
+    if question_mode == "PDF Upload":
+        grade = st.text_input("Grade : ")
+        subject = st.text_input("Subject : ")
+        book_title = st.text_input("Book Title : ")
+    else:
+        # Predefined Questions Mode
+        subjects = db_manager.get_subjects()
+        
+        if subjects:
+            selected_subject = st.selectbox(
+                "Subject:",
+                options=[s['name'] for s in subjects],
+                help="Select the subject for your practice session"
             )
-            st.session_state.current_conversation_id = conversation_id
-            st.success(f"📚 Study session created and saved!")
-        except Exception as e:
-            st.error(f"Error creating study session: {str(e)}")
+            
+            subject_id = next((s['id'] for s in subjects if s['name'] == selected_subject), None)
+            
+            if subject_id:
+                # Get available grades for this subject
+                grades = db_manager.get_grades_by_subject(subject_id)
+                if grades:
+                    grade = st.selectbox("Grade:", grades)
+                else:
+                    grade = st.text_input("Grade:", value="11")
+                
+                # Get topics for this subject
+                topics = db_manager.get_topics_by_subject(subject_id)
+                topic_options = ["All Topics"] + [t['name'] for t in topics]
+                selected_topic = st.selectbox("Topic:", topic_options)
+                
+                topic_id = None
+                if selected_topic != "All Topics":
+                    topic_id = next((t['id'] for t in topics if t['name'] == selected_topic), None)
+                
+                # Difficulty range
+                col1, col2 = st.columns(2)
+                with col1:
+                    difficulty_min = st.slider("Minimum Difficulty:", 1.0, 100.0, 1.0, 1.0)
+                with col2:
+                    difficulty_max = st.slider("Maximum Difficulty:", 1.0, 100.0, 100.0, 1.0)
+                
+                # Preview available questions
+                preview_questions = db_manager.get_predefined_questions(
+                    subject_id=subject_id,
+                    topic_id=topic_id,
+                    grade=grade,
+                    difficulty_min=difficulty_min,
+                    difficulty_max=difficulty_max
+                )
+                
+                st.info(f"📊 {len(preview_questions)} questions available with your current filters")
+                
+                subject = selected_subject
+                book_title = f"Predefined Questions - {selected_subject}"
+        else:
+            st.error("No subjects found in the question bank. Please contact administrator.")
+            subject = ""
+            grade = ""
+            book_title = ""
 
-# ------------------ Page Viewer ------------------
-if st.session_state.pdf_text_dict:
-    selected_page = st.selectbox("View a Page:", list(st.session_state.pdf_text_dict.keys()))
-    st.text_area("Extracted Text", st.session_state.pdf_text_dict[selected_page], height=300)
+# ------------------ PDF Upload (only for PDF mode) ------------------
+if st.session_state.question_mode == "PDF Upload":
+    st.header("Upload the Book's PDF")
+    book_pdf_file = st.file_uploader("Choose a PDF", type="pdf")
 
-# ------------------ Question Generation ------------------
-if st.button("🔍 Generate Viva Questions"):
+    if book_pdf_file is not None:
+        doc = fitz.open(stream=book_pdf_file.read(), filetype="pdf")
+        st.session_state.pdf_text_dict.clear()
+
+        for i, page in enumerate(doc):
+            text = page.get_text().strip()
+            if text:
+                st.session_state.pdf_text_dict[i + 1] = text
+
+        st.success("✅ PDF uploaded and text extracted.")
+        
+        # Create new conversation in database
+        if not st.session_state.current_conversation_id and name and grade and subject and book_title:
+            try:
+                pdf_content = "\n\n".join(st.session_state.pdf_text_dict.values())
+                conversation_id = db_manager.create_conversation(
+                    user_id=current_user['id'],
+                    name=name,
+                    grade=grade,
+                    subject=subject,
+                    book_title=book_title,
+                    pdf_content=pdf_content
+                )
+                st.session_state.current_conversation_id = conversation_id
+                st.success(f"📚 Study session created and saved!")
+            except Exception as e:
+                st.error(f"Error creating study session: {str(e)}")
+
+    # ------------------ Page Viewer ------------------
     if st.session_state.pdf_text_dict:
-        full_text = "\n\n".join(st.session_state.pdf_text_dict.values())
+        selected_page = st.selectbox("View a Page:", list(st.session_state.pdf_text_dict.keys()))
+        st.text_area("Extracted Text", st.session_state.pdf_text_dict[selected_page], height=300)
 
-        prompt = f"""
+    # ------------------ Question Generation ------------------
+    if st.button("🔍 Generate Viva Questions"):
+        if st.session_state.pdf_text_dict:
+            full_text = "\n\n".join(st.session_state.pdf_text_dict.values())
+
+            prompt = f"""
 You are an expert examiner. Based on the following content:
 
 --- CONTENT START ---
@@ -157,62 +262,96 @@ Difficult:
 Q11: ...
 A11: ...
 ...
-        """
+            """
 
-        response = llm.invoke(prompt)
-        raw_output = response.strip() if isinstance(response, str) else response.content.strip()
+            response = llm.invoke(prompt)
+            raw_output = response.strip() if isinstance(response, str) else response.content.strip()
 
-        sections = {"Easy": [], "Moderate": [], "Difficult": []}
-        current_section = None
+            sections = {"Easy": [], "Moderate": [], "Difficult": []}
+            current_section = None
 
-        for line in raw_output.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            if "Easy" in line:
-                current_section = "Easy"
-            elif "Moderate" in line:
-                current_section = "Moderate"
-            elif "Difficult" in line:
-                current_section = "Difficult"
-            elif current_section and (line.startswith("Q") or line.startswith("A")):
-                sections[current_section].append(line)
-
-        qa_dict = {}
-        all_qas = []
-        for level, lines in sections.items():
-            level_qas = []
-            for i in range(0, len(lines), 2):
-                try:
-                    q = lines[i].split(":", 1)[1].strip()
-                    a = lines[i + 1].split(":", 1)[1].strip()
-                    qa_item = {
-                        "level": level,
-                        "question": q,
-                        "answer": a,
-                        "user_answer": "",
-                        "score": None
-                    }
-                    level_qas.append(qa_item)
-                    all_qas.append(qa_item)
-                except Exception:
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line:
                     continue
-            qa_dict[level] = level_qas
+                if "Easy" in line:
+                    current_section = "Easy"
+                elif "Moderate" in line:
+                    current_section = "Moderate"
+                elif "Difficult" in line:
+                    current_section = "Difficult"
+                elif current_section and (line.startswith("Q") or line.startswith("A")):
+                    sections[current_section].append(line)
 
-        st.session_state.qa_dict = qa_dict
-        st.session_state.all_qas = all_qas
-        st.session_state.qa_index = 0
-        st.session_state.used_q_indices = []
-        
-        # Save questions to database
-        if st.session_state.current_conversation_id:
-            success = db_manager.save_questions(st.session_state.current_conversation_id, all_qas)
-            if success:
-                st.success("✅ Viva questions generated and saved to database.")
+            qa_dict = {}
+            all_qas = []
+            for level, lines in sections.items():
+                level_qas = []
+                for i in range(0, len(lines), 2):
+                    try:
+                        q = lines[i].split(":", 1)[1].strip()
+                        a = lines[i + 1].split(":", 1)[1].strip()
+                        qa_item = {
+                            "level": level,
+                            "question": q,
+                            "answer": a,
+                            "user_answer": "",
+                            "score": None
+                        }
+                        level_qas.append(qa_item)
+                        all_qas.append(qa_item)
+                    except Exception:
+                        continue
+                qa_dict[level] = level_qas
+
+            st.session_state.qa_dict = qa_dict
+            st.session_state.all_qas = all_qas
+            st.session_state.qa_index = 0
+            st.session_state.used_q_indices = []
+            
+            # Save questions to database
+            if st.session_state.current_conversation_id:
+                success = db_manager.save_questions(st.session_state.current_conversation_id, all_qas)
+                if success:
+                    st.success("✅ Viva questions generated and saved to database.")
+                else:
+                    st.warning("✅ Viva questions generated but couldn't save to database.")
             else:
-                st.warning("✅ Viva questions generated but couldn't save to database.")
+                st.success("✅ Viva questions generated.")
+
+# ------------------ Predefined Questions Mode ------------------
+elif st.session_state.question_mode == "Predefined Questions":
+    st.header("📋 Predefined Question Bank")
+    
+    # Start predefined question session button
+    if st.button("🚀 Start Question Session"):
+        if name and grade and subject and 'subject_id' in locals() and subject_id:
+            try:
+                session_id = db_manager.create_predefined_question_session(
+                    user_id=current_user['id'],
+                    name=name,
+                    grade=grade,
+                    subject_id=subject_id,
+                    topic_id=topic_id if 'topic_id' in locals() else None,
+                    difficulty_min=difficulty_min if 'difficulty_min' in locals() else 1.0,
+                    difficulty_max=difficulty_max if 'difficulty_max' in locals() else 100.0
+                )
+                
+                st.session_state.current_predefined_session_id = session_id
+                
+                # Load questions for the session
+                session_info, questions = db_manager.get_predefined_session_questions(session_id)
+                st.session_state.all_qas = questions
+                st.session_state.qa_index = 0
+                st.session_state.used_q_indices = []
+                
+                st.success(f"📚 Question session started with {len(questions)} questions!")
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Error creating question session: {str(e)}")
         else:
-            st.success("✅ Viva questions generated.")
+            st.error("Please fill in all required fields and select valid options.")
 
 # ------------------ Answer Evaluation ------------------
 def evaluate_answer(question, correct_answer, user_answer):
@@ -330,10 +469,23 @@ if st.session_state.all_qas:
                 
                 # Save to database
                 if st.session_state.current_conversation_id:
+                    # PDF-generated questions
                     questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
                     if current < len(questions):
                         question_id = questions[current]['id']
                         db_manager.save_user_answer(question_id, text, score, answer_method='audio')
+                        db_manager.update_user_progress(current_user['id'], subject)
+                elif st.session_state.current_predefined_session_id:
+                    # Predefined questions
+                    question_id = qa.get('id')
+                    if question_id:
+                        db_manager.save_predefined_question_answer(
+                            st.session_state.current_predefined_session_id,
+                            question_id,
+                            text,
+                            score,
+                            answer_method='audio'
+                        )
                         db_manager.update_user_progress(current_user['id'], subject)
                 
                 # Add to used indices
@@ -355,11 +507,25 @@ if st.session_state.all_qas:
         
         # Save answer to database
         if st.session_state.current_conversation_id:
-            # Get question ID from database
+            # PDF-generated questions
             questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
             if current < len(questions):
                 question_id = questions[current]['id']
                 db_manager.save_user_answer(question_id, manual_answer, score, answer_method='text')
+                
+                # Update user progress
+                db_manager.update_user_progress(current_user['id'], subject)
+        elif st.session_state.current_predefined_session_id:
+            # Predefined questions
+            question_id = qa.get('id')  # Use the question ID from predefined bank
+            if question_id:
+                db_manager.save_predefined_question_answer(
+                    st.session_state.current_predefined_session_id, 
+                    question_id, 
+                    manual_answer, 
+                    score, 
+                    answer_method='text'
+                )
                 
                 # Update user progress
                 db_manager.update_user_progress(current_user['id'], subject)
@@ -373,8 +539,9 @@ if st.session_state.all_qas:
         
         # Check if session is complete
         if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
-            # Mark conversation as completed
+            # Mark session as completed
             if st.session_state.current_conversation_id:
+                # Mark PDF conversation as completed
                 try:
                     import sqlite3
                     with sqlite3.connect(db_manager.db_path) as conn:
@@ -387,9 +554,23 @@ if st.session_state.all_qas:
                         conn.commit()
                 except Exception as e:
                     print(f"Error marking conversation complete: {e}")
+            elif st.session_state.current_predefined_session_id:
+                # Mark predefined question session as completed
+                try:
+                    import sqlite3
+                    with sqlite3.connect(db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute("""
+                            UPDATE predefined_question_sessions 
+                            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                            WHERE id = ?
+                        """, (st.session_state.current_predefined_session_id,))
+                        conn.commit()
+                except Exception as e:
+                    print(f"Error marking predefined session complete: {e}")
             
             st.info("✅ All questions completed.")
-            total_score = sum(q['score'] for q in st.session_state.all_qas)
+            total_score = sum(q['score'] for q in st.session_state.all_qas if q.get('score') is not None)
             max_score = 10 * len(st.session_state.all_qas)
             st.balloons()
             st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
@@ -443,12 +624,12 @@ if st.session_state.all_qas:
         )
         
     # Show session statistics
-    if st.session_state.current_conversation_id:
+    if st.session_state.current_conversation_id or st.session_state.current_predefined_session_id:
         st.subheader("📊 Session Statistics")
         
-        total_questions = len(st.session_state.all_qas)
+        total_questions = len(st.session_state.all_qas) if st.session_state.all_qas else 0
         answered_questions = len(st.session_state.used_q_indices)
-        total_score = sum(q.get('score', 0) for q in st.session_state.all_qas if q.get('score') is not None)
+        total_score = sum(q.get('score', 0) for q in st.session_state.all_qas if q.get('score') is not None) if st.session_state.all_qas else 0
         max_score = answered_questions * 10
         
         col1, col2, col3, col4 = st.columns(4)
@@ -462,8 +643,13 @@ if st.session_state.all_qas:
     
     # Add option to start new session
     if st.button("🆕 Start New Session"):
-        # Clear session state
-        for key in ['current_conversation_id', 'pdf_text_dict', 'qa_dict', 'all_qas', 'qa_index', 'used_q_indices', 'resume_session']:
+        # Clear session state for both PDF and predefined question sessions
+        keys_to_clear = [
+            'current_conversation_id', 'current_predefined_session_id', 
+            'pdf_text_dict', 'qa_dict', 'all_qas', 'qa_index', 'used_q_indices', 
+            'resume_session', 'resume_predefined_session', 'question_mode'
+        ]
+        for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()

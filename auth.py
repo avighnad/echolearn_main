@@ -194,6 +194,7 @@ class AuthManager:
         # Get user statistics
         user_stats = self.db.get_user_stats(user['id'])
         conversations = self.db.get_user_conversations(user['id'])
+        predefined_sessions = self.db.get_user_predefined_sessions(user['id'])
         
         # Show statistics
         if user_stats:
@@ -221,21 +222,64 @@ class AuthManager:
                         col2.write(f"**Questions:** {stats['questions_answered']}")
                         col3.write(f"**Avg Score:** {stats['average_score']:.1f}/10")
         
-        # Show recent conversations
-        if conversations:
+        # Show recent study sessions (both PDF and predefined)
+        if conversations or predefined_sessions:
             st.subheader("📖 Recent Study Sessions")
             
-            for conv in conversations[:5]:  # Show last 5 conversations
-                with st.expander(f"{conv['subject']} - {conv['book_title']} ({conv['created_at'][:10]})"):
+            # Combine and sort all sessions by creation date
+            all_sessions = []
+            
+            # Add PDF-based conversations
+            for conv in conversations:
+                all_sessions.append({
+                    'type': 'pdf',
+                    'id': conv['id'],
+                    'title': f"📄 {conv['subject']} - {conv['book_title']}",
+                    'created_at': conv['created_at'],
+                    'grade': conv['grade'],
+                    'questions_answered': conv['questions_answered'],
+                    'total_questions': conv['total_questions'],
+                    'total_score': conv['total_score'],
+                    'max_possible_score': conv['max_possible_score'],
+                    'status': conv['status']
+                })
+            
+            # Add predefined question sessions
+            for session in predefined_sessions:
+                topic_display = f" - {session['topic']}" if session['topic'] else ""
+                all_sessions.append({
+                    'type': 'predefined',
+                    'id': session['id'],
+                    'title': f"📋 {session['subject']}{topic_display}",
+                    'created_at': session['created_at'],
+                    'grade': session['grade'],
+                    'questions_answered': session['questions_answered'],
+                    'total_questions': session['total_questions'],
+                    'total_score': session['total_score'],
+                    'max_possible_score': session['max_possible_score'],
+                    'status': session['status']
+                })
+            
+            # Sort by creation date (newest first)
+            all_sessions.sort(key=lambda x: x['created_at'], reverse=True)
+            
+            # Show last 8 sessions
+            for session in all_sessions[:8]:
+                with st.expander(f"{session['title']} ({session['created_at'][:10]})"):
                     col1, col2, col3, col4 = st.columns(4)
-                    col1.write(f"**Grade:** {conv['grade']}")
-                    col2.write(f"**Questions:** {conv['questions_answered']}/{conv['total_questions']}")
-                    col3.write(f"**Score:** {conv['total_score']}/{conv['max_possible_score']}")
-                    col4.write(f"**Status:** {conv['status'].title()}")
+                    col1.write(f"**Grade:** {session['grade']}")
+                    col2.write(f"**Questions:** {session['questions_answered']}/{session['total_questions']}")
+                    col3.write(f"**Score:** {session['total_score']}/{session['max_possible_score']}")
+                    col4.write(f"**Status:** {session['status'].title()}")
                     
-                    if st.button(f"Resume Session", key=f"resume_{conv['id']}"):
-                        st.session_state.current_conversation_id = conv['id']
-                        st.session_state.resume_session = True
+                    resume_key = f"resume_{session['type']}_{session['id']}"
+                    if st.button(f"Resume Session", key=resume_key):
+                        if session['type'] == 'pdf':
+                            st.session_state.current_conversation_id = session['id']
+                            st.session_state.resume_session = True
+                        else:  # predefined
+                            st.session_state.current_predefined_session_id = session['id']
+                            st.session_state.resume_predefined_session = True
                         st.rerun()
 
 # Global auth manager instance
