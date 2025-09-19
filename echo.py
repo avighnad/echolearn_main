@@ -65,6 +65,16 @@ if "difficulty_path" not in st.session_state:
 if "session_complete" not in st.session_state:
     st.session_state.session_complete = False
 
+# Selective mutism support state variables
+if "selective_mutism_mode" not in st.session_state:
+    st.session_state.selective_mutism_mode = False
+if "confidence_level" not in st.session_state:
+    st.session_state.confidence_level = 1  # Scale 1-5 for building confidence
+if "success_streak" not in st.session_state:
+    st.session_state.success_streak = 0
+if "sm_progress_milestones" not in st.session_state:
+    st.session_state.sm_progress_milestones = []
+
 # ------------------ Check for Resume Session ------------------
 if st.session_state.resume_session and st.session_state.current_conversation_id:
     # Load PDF-based conversation data
@@ -410,6 +420,45 @@ Evaluate the student's answer strictly and give a score out of 10. Just reply wi
     except Exception:
         return 0
 
+def evaluate_answer_selective_mutism(question, correct_answer, user_answer, confidence_level=1):
+    """
+    Specialized evaluation for selective mutism mode - more encouraging and confidence-building
+    """
+    eval_prompt = f"""
+You are a supportive and encouraging teacher working with a student who has selective mutism. 
+Your goal is to build their confidence while still providing meaningful feedback.
+
+Question: {question}
+
+Correct Answer: {correct_answer}
+
+Student's Answer: {user_answer}
+
+Please evaluate this answer with the following guidelines:
+- Focus on what the student got right, even partially correct concepts
+- Give credit for effort and any relevant information provided
+- Be more lenient with scoring to encourage participation
+- Score range: 4-10 (minimum 4 to maintain confidence, maximum 10 for excellent answers)
+- Consider that this student is working hard to overcome communication challenges
+
+Reply with only a number between 4 and 10. No explanation, no extra words.
+"""
+    result = llm.invoke(eval_prompt)
+    try:
+        score = int(result.strip()) if isinstance(result, str) else int(result.content.strip())
+        # Ensure score is between 4-10 for selective mutism mode
+        score = max(4, min(10, score))
+        
+        # Bonus points for higher confidence levels
+        if confidence_level >= 3:
+            score = min(10, score + 1)  # +1 bonus for medium-high confidence
+        elif confidence_level >= 5:
+            score = min(10, score + 2)  # +2 bonus for highest confidence
+            
+        return score
+    except Exception:
+        return 4  # Minimum encouraging score
+
 # ------------------ Adaptive Question Logic (Following Flowchart) ------------------
 def get_next_question_adaptive(user_score):
     """Implements the adaptive logic from the flowchart"""
@@ -486,12 +535,92 @@ def get_difficulty_from_level(level):
     }
     return mapping.get(level, 10)
 
+# ------------------ Selective Mutism Support Functions ------------------
+def update_confidence_level(success):
+    """Update confidence level based on success/failure"""
+    if success:
+        st.session_state.success_streak += 1
+        # Increase confidence level every 3 successful answers
+        if st.session_state.success_streak % 3 == 0 and st.session_state.confidence_level < 5:
+            st.session_state.confidence_level += 1
+            st.session_state.sm_progress_milestones.append({
+                'type': 'confidence_increase',
+                'level': st.session_state.confidence_level,
+                'timestamp': time.time()
+            })
+    else:
+        st.session_state.success_streak = 0
+        # Slightly decrease confidence but never below 1
+        if st.session_state.confidence_level > 1:
+            st.session_state.confidence_level = max(1, st.session_state.confidence_level - 0.5)
+
+def generate_multiple_choice_options(correct_answer, question):
+    """Generate plausible multiple choice options for selective mutism mode"""
+    prompt = f"""
+Create 3 plausible but incorrect answer choices for this question along with the correct answer.
+Make the wrong answers believable but clearly different from the correct answer.
+
+Question: {question}
+Correct Answer: {correct_answer}
+
+Provide exactly 4 options in this format:
+A) [option 1]
+B) [option 2] 
+C) [option 3]
+D) [option 4]
+
+Make sure one of these options matches the correct answer exactly.
+"""
+    try:
+        result = llm.invoke(prompt)
+        response = result.strip() if isinstance(result, str) else result.content.strip()
+        
+        # Parse the response to extract options
+        options = []
+        correct_index = 0
+        
+        for line in response.split('\n'):
+            line = line.strip()
+            if line and (line.startswith('A)') or line.startswith('B)') or line.startswith('C)') or line.startswith('D)')):
+                option_text = line[3:].strip()  # Remove "A) " prefix
+                options.append(option_text)
+                
+                # Check if this option matches the correct answer
+                if correct_answer.lower().strip() in option_text.lower() or option_text.lower().strip() in correct_answer.lower():
+                    correct_index = len(options) - 1
+        
+        if len(options) == 4:
+            return options, correct_index
+        else:
+            # Fallback: create simple options
+            return [correct_answer, "Not applicable", "Insufficient information", "Cannot be determined"], 0
+            
+    except Exception:
+        # Fallback options
+        return [correct_answer, "Not applicable", "Insufficient information", "Cannot be determined"], 0
+
+def display_selective_mutism_encouragement(score):
+    """Display encouraging messages for selective mutism users"""
+    encouraging_messages = {
+        10: ["🌟 Outstanding work! You're showing incredible understanding!", "🏆 Perfect answer! Your hard work is really paying off!", "✨ Excellent! You should be very proud of yourself!"],
+        9: ["⭐ Fantastic job! You're doing wonderfully!", "🎉 Great answer! You're building so much confidence!", "💪 Impressive! Keep up this excellent work!"],
+        8: ["😊 Very good! You're making excellent progress!", "👏 Well done! Your understanding is growing stronger!", "🌈 Great work! You should feel proud!"],
+        7: ["👍 Good job! You're on the right track!", "🎯 Nice work! You're showing real progress!", "💚 Well done! Keep going!"],
+        6: ["🤝 Good effort! You're learning and growing!", "📚 You're doing well! Keep practicing!", "☀️ Nice try! You're moving forward!"],
+        5: ["💛 You're trying hard, and that's what matters!", "🌱 You're growing! Keep up the good work!", "🤗 Great effort! You're on your way!"],
+        4: ["🌟 You participated, and that takes courage!", "💖 Thank you for trying! That's a big step!", "🌸 You did it! Be proud of yourself!"]
+    }
+    
+    messages = encouraging_messages.get(score, encouraging_messages[4])
+    import random
+    return random.choice(messages)
+
 # ------------------ Viva UI ------------------
 if st.session_state.all_qas:
     st.subheader("🧠 Viva Questions")
     
-    # Adaptive Mode Toggle
-    col_adaptive, col_info = st.columns([1, 3])
+    # Mode Toggles
+    col_adaptive, col_sm, col_info = st.columns([1, 1, 2])
     with col_adaptive:
         adaptive_mode = st.checkbox(
             "🎯 Adaptive Mode", 
@@ -502,9 +631,27 @@ if st.session_state.all_qas:
             st.session_state.adaptive_mode = adaptive_mode
             st.rerun()
     
+    with col_sm:
+        selective_mutism_mode = st.checkbox(
+            "🎙️ Selective Mutism Training", 
+            value=st.session_state.selective_mutism_mode,
+            help="Enable speech training mode - provides gentle encouragement for verbal responses, supportive feedback, and confidence building"
+        )
+        if selective_mutism_mode != st.session_state.selective_mutism_mode:
+            st.session_state.selective_mutism_mode = selective_mutism_mode
+            # Reset confidence and success tracking when toggling mode
+            if selective_mutism_mode:
+                st.session_state.confidence_level = 1
+                st.session_state.success_streak = 0
+                st.info("🎙️ Selective Mutism Training Mode enabled! Focus on gentle speech practice with supportive feedback.")
+            st.rerun()
+    
     with col_info:
-        if st.session_state.adaptive_mode:
+        if st.session_state.adaptive_mode and not st.session_state.selective_mutism_mode:
             st.caption(f"Current adaptive difficulty: **{st.session_state.current_difficulty}/20** | Consecutive wrong: **{st.session_state.consecutive_wrong_same_level}**")
+        elif st.session_state.selective_mutism_mode:
+            confidence_stars = "⭐" * st.session_state.confidence_level
+            st.caption(f"🎙️ Speech Training | Confidence Level: {confidence_stars} | Success Streak: **{st.session_state.success_streak}**")
 
     current = st.session_state.qa_index
     qa = st.session_state.all_qas[current]
@@ -545,7 +692,7 @@ if st.session_state.all_qas:
             st.info(f"🎯 Current Target Difficulty: {st.session_state.current_difficulty} | This Question: {current_qa_difficulty}")
 
 
-    # TTS using pyttsx3
+    # TTS using pyttsx3 - always available as it helps with comprehension
     if st.button("🔊 Read Question Aloud"):
         try:
             engine = pyttsx3.init()
@@ -554,163 +701,328 @@ if st.session_state.all_qas:
         except Exception as e:
             st.warning(f"TTS failed: {e}")
 
-    # Audio recording and transcription
-    record_seconds = st.slider("Select recording time (seconds):", 3, 15, 5)
+    # Audio recording - enhanced encouragement in selective mutism training mode
+    if st.session_state.selective_mutism_mode:
+        st.markdown("### 🎙️ **Speech Training Practice**")
+        st.info("💪 This is your chance to practice speaking! Remember, every attempt makes you stronger.")
+        
+        # More encouraging interface for selective mutism training
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            record_seconds = st.slider("Choose comfortable recording time:", 3, 10, 5, 
+                                     help="Start with shorter times if you feel more comfortable")
+        with col2:
+            if st.session_state.confidence_level >= 3:
+                st.success("🌟 You're building great confidence!")
+            elif st.session_state.confidence_level >= 2:
+                st.info("😊 You're making progress!")
+            else:
+                st.info("🌱 Every step counts!")
 
-    if st.button("🎙️ Record Your Answer"):
-        try:
-            st.info("Recording... Speak now!")
-            fs = 44100
-            audio = sd.rec(int(record_seconds * fs), samplerate=fs, channels=1, dtype='int16')
-            sd.wait()
-            wav.write("temp.wav", fs, audio)
-
-            # Transcribe
-            recognizer = sr.Recognizer()
-            with sr.AudioFile("temp.wav") as source:
-                audio_data = recognizer.record(source)
-                text = recognizer.recognize_google(audio_data)
-
-                st.session_state.all_qas[current]["user_answer"] = text
-                st.success("✅ Transcription Successful")
-                st.text_area("Your Answer (from audio)", value=text, key=f"audio_text_{current}")
+        if st.button("🎙️ **Practice Speaking** - You've Got This!", key="speech_training"):
+            try:
+                # Extra encouraging message for selective mutism training
+                st.success("🌟 Wonderful! You're being so brave by practicing speaking!")
+                st.info("🎙️ Recording now... Take your time and speak when you're ready!")
                 
-                # Auto-evaluate and save audio answer
-                score = evaluate_answer(qa["question"], qa["answer"], text)
+                fs = 44100
+                audio = sd.rec(int(record_seconds * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
+                wav.write("temp.wav", fs, audio)
+
+                # Transcribe with encouraging messages
+                with st.spinner("🔍 Understanding your speech... You're doing great!"):
+                    recognizer = sr.Recognizer()
+                    with sr.AudioFile("temp.wav") as source:
+                        audio_data = recognizer.record(source)
+                        text = recognizer.recognize_google(audio_data)
+
+                        st.session_state.all_qas[current]["user_answer"] = text
+                        st.success("🎉 Amazing! I heard what you said! You spoke clearly!")
+                        st.text_area("What you said (so proud of you!):", value=text, key=f"speech_training_text_{current}")
+                        
+                        # Use selective mutism scoring for encouragement
+                        score = evaluate_answer_selective_mutism(qa["question"], qa["answer"], text, st.session_state.confidence_level)
+                        st.session_state.all_qas[current]["score"] = score
+                        
+                        # Update confidence and show extra encouragement
+                        success = score >= 6  # More lenient success criteria
+                        update_confidence_level(success)
+                        encouragement = display_selective_mutism_encouragement(score)
+                        
+                        # Special celebration for speech training
+                        if success:
+                            st.balloons()
+                            st.success(f"🌟 {encouragement}")
+                            st.success("🎙️ **You did it! You spoke up and that's incredible!** Your voice matters!")
+                        else:
+                            st.success(f"💖 {encouragement}")
+                            st.info("🎙️ **You were so brave to speak! Every time you practice, you get stronger!**")
+                        
+                        # Save to database with special method tag
+                        if st.session_state.current_conversation_id:
+                            questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+                            if current < len(questions):
+                                question_id = questions[current]['id']
+                                db_manager.save_user_answer(question_id, text, score, answer_method='speech_training')
+                                db_manager.update_user_progress(current_user['id'], subject)
+                        elif st.session_state.current_predefined_session_id:
+                            question_id = qa.get('id')
+                            if question_id:
+                                db_manager.save_predefined_question_answer(
+                                    st.session_state.current_predefined_session_id,
+                                    question_id,
+                                    text,
+                                    score,
+                                    answer_method='speech_training'
+                                )
+                                db_manager.update_user_progress(current_user['id'], subject)
+                        
+                        # Add to used indices
+                        if current not in st.session_state.used_q_indices:
+                            st.session_state.used_q_indices.append(current)
+                        
+                        # Move to next question after celebrating
+                        time.sleep(3)  # Let them see the celebration
+                        
+                        # Check completion or move to next
+                        if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
+                            st.info("🎊 You completed all questions with your voice! What an achievement!")
+                            st.session_state.session_complete = True
+                            display_final_score_report()
+                        else:
+                            next_unanswered = next((i for i, q in enumerate(st.session_state.all_qas) 
+                                                  if i not in st.session_state.used_q_indices), None)
+                            if next_unanswered is not None:
+                                st.session_state.qa_index = next_unanswered
+                                st.rerun()
+
+            except Exception as e:
+                st.warning("🤗 No worries! Technology can be tricky sometimes. The important thing is that you tried to speak!")
+                st.info("💡 **Tip**: You can still practice by using the text option below. Every form of participation counts!")
+                
+        # Backup text option for when speech feels too difficult
+        st.markdown("---")
+        st.markdown("### ✍️ **Alternative: Write Your Answer**")
+        st.info("🌱 If speaking feels too hard right now, you can write your answer. This is also great practice!")
+        
+        backup_answer = st.text_area(
+            "Type your answer here:", 
+            value=qa.get("user_answer", ""), 
+            key=f"backup_answer_{current}",
+            help="Writing is also a wonderful way to express your thoughts!"
+        )
+        
+        if st.button("📝 Submit Written Answer", key="backup_submit"):
+            if backup_answer.strip():
+                score = evaluate_answer_selective_mutism(qa["question"], qa["answer"], backup_answer, st.session_state.confidence_level)
+                st.session_state.all_qas[current]["user_answer"] = backup_answer
                 st.session_state.all_qas[current]["score"] = score
                 
-                # Save to database
+                # Update confidence and show encouragement
+                success = score >= 6
+                update_confidence_level(success)
+                encouragement = display_selective_mutism_encouragement(score)
+                st.success(f"✨ {encouragement}")
+                st.info("💪 **Great job expressing yourself in writing! You're building communication skills!**")
+                
+                # Save and proceed (similar to speech version but with different method)
                 if st.session_state.current_conversation_id:
-                    # PDF-generated questions
                     questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
                     if current < len(questions):
                         question_id = questions[current]['id']
-                        db_manager.save_user_answer(question_id, text, score, answer_method='audio')
+                        db_manager.save_user_answer(question_id, backup_answer, score, answer_method='selective_mutism_text')
                         db_manager.update_user_progress(current_user['id'], subject)
                 elif st.session_state.current_predefined_session_id:
-                    # Predefined questions
                     question_id = qa.get('id')
                     if question_id:
                         db_manager.save_predefined_question_answer(
                             st.session_state.current_predefined_session_id,
                             question_id,
-                            text,
+                            backup_answer,
                             score,
-                            answer_method='audio'
+                            answer_method='selective_mutism_text'
                         )
                         db_manager.update_user_progress(current_user['id'], subject)
                 
-                # Add to used indices
                 if current not in st.session_state.used_q_indices:
                     st.session_state.used_q_indices.append(current)
                 
-                st.success(f"🎙️ Audio answer scored: {score}/10")
-
-        except Exception as e:
-            st.error(f"❌ Error during recording/transcription: {e}")
-
-    # Manual edit box
-    manual_answer = st.text_area("Edit Your Answer", value=qa.get("user_answer", ""), key=f"user_answer_{current}")
-
-    if st.button("✅ Submit Answer"):
-        st.session_state.all_qas[current]["user_answer"] = manual_answer
-        score = evaluate_answer(qa["question"], qa["answer"], manual_answer)
-        st.session_state.all_qas[current]["score"] = score
-        
-        # Save answer to database
-        if st.session_state.current_conversation_id:
-            # PDF-generated questions
-            questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
-            if current < len(questions):
-                question_id = questions[current]['id']
-                db_manager.save_user_answer(question_id, manual_answer, score, answer_method='text')
+                time.sleep(2)
                 
-                # Update user progress
-                db_manager.update_user_progress(current_user['id'], subject)
-        elif st.session_state.current_predefined_session_id:
-            # Predefined questions
-            question_id = qa.get('id')  # Use the question ID from predefined bank
-            if question_id:
-                db_manager.save_predefined_question_answer(
-                    st.session_state.current_predefined_session_id, 
-                    question_id, 
-                    manual_answer, 
-                    score, 
-                    answer_method='text'
-                )
-                
-                # Update user progress
-                db_manager.update_user_progress(current_user['id'], subject)
-        
-        # Only add to used indices if not already added
-        if current not in st.session_state.used_q_indices:
-            st.session_state.used_q_indices.append(current)
-            
-        st.success(f"✅ Answer saved and scored: {score}/10")
-        time.sleep(1)  # Short delay to allow user to see the message
-        
-        # Check if session is complete
-        if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
-            # Mark session as completed
-            if st.session_state.current_conversation_id:
-                # Mark PDF conversation as completed
-                try:
-                    import sqlite3
-                    with sqlite3.connect(db_manager.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            UPDATE conversations 
-                            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                        """, (st.session_state.current_conversation_id,))
-                        conn.commit()
-                except Exception as e:
-                    print(f"Error marking conversation complete: {e}")
-            elif st.session_state.current_predefined_session_id:
-                # Mark predefined question session as completed
-                try:
-                    import sqlite3
-                    with sqlite3.connect(db_manager.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute("""
-                            UPDATE predefined_question_sessions 
-                            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
-                            WHERE id = ?
-                        """, (st.session_state.current_predefined_session_id,))
-                        conn.commit()
-                except Exception as e:
-                    print(f"Error marking predefined session complete: {e}")
-            
-            st.info("✅ All questions completed.")
-            st.session_state.session_complete = True
-            total_score = sum(q['score'] for q in st.session_state.all_qas if q.get('score') is not None)
-            max_score = 10 * len(st.session_state.all_qas)
-            st.balloons()
-            
-            # Comprehensive final scoring display
-            display_final_score_report()
-            
-            st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
-        else:
-            if st.session_state.adaptive_mode:
-                # Run adaptive selection based on flowchart logic
-                current_index_before_adaptive = st.session_state.qa_index
-                
-                get_next_question_adaptive(score)
-                
-                # If adaptive selection changed the index, show a message and rerun
-                if current_index_before_adaptive != st.session_state.qa_index:
-                    st.info(f"🎯 Adaptive system selected question {st.session_state.qa_index + 1} (Difficulty: {st.session_state.current_difficulty})")
-                    st.rerun()
+                # Check completion or move to next
+                if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
+                    st.info("🎉 You completed all questions! So proud of you!")
+                    st.session_state.session_complete = True
+                    display_final_score_report()
                 else:
-                    st.warning("⚠️ No more suitable questions found at current difficulty level.")
+                    next_unanswered = next((i for i, q in enumerate(st.session_state.all_qas) 
+                                          if i not in st.session_state.used_q_indices), None)
+                    if next_unanswered is not None:
+                        st.session_state.qa_index = next_unanswered
+                        st.rerun()
             else:
-                # Manual mode - just proceed to next unanswered question
-                next_unanswered = next((i for i, q in enumerate(st.session_state.all_qas) 
-                                      if i not in st.session_state.used_q_indices), None)
-                if next_unanswered is not None:
-                    st.session_state.qa_index = next_unanswered
-                    st.rerun()
+                st.warning("💖 Please write something! Even a few words show you're trying.")
+
+    else:
+        # Regular audio recording for normal mode
+        record_seconds = st.slider("Select recording time (seconds):", 3, 15, 5)
+
+        if st.button("🎙️ Record Your Answer"):
+            try:
+                st.info("Recording... Speak now!")
+                fs = 44100
+                audio = sd.rec(int(record_seconds * fs), samplerate=fs, channels=1, dtype='int16')
+                sd.wait()
+                wav.write("temp.wav", fs, audio)
+
+                # Transcribe
+                recognizer = sr.Recognizer()
+                with sr.AudioFile("temp.wav") as source:
+                    audio_data = recognizer.record(source)
+                    text = recognizer.recognize_google(audio_data)
+
+                    st.session_state.all_qas[current]["user_answer"] = text
+                    st.success("✅ Transcription Successful")
+                    st.text_area("Your Answer (from audio)", value=text, key=f"audio_text_{current}")
+                    
+                    # Auto-evaluate and save audio answer
+                    score = evaluate_answer(qa["question"], qa["answer"], text)
+                    st.session_state.all_qas[current]["score"] = score
+                    
+                    # Save to database
+                    if st.session_state.current_conversation_id:
+                        # PDF-generated questions
+                        questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+                        if current < len(questions):
+                            question_id = questions[current]['id']
+                            db_manager.save_user_answer(question_id, text, score, answer_method='audio')
+                            db_manager.update_user_progress(current_user['id'], subject)
+                    elif st.session_state.current_predefined_session_id:
+                        # Predefined questions
+                        question_id = qa.get('id')
+                        if question_id:
+                            db_manager.save_predefined_question_answer(
+                                st.session_state.current_predefined_session_id,
+                                question_id,
+                                text,
+                                score,
+                                answer_method='audio'
+                            )
+                            db_manager.update_user_progress(current_user['id'], subject)
+                    
+                    # Add to used indices
+                    if current not in st.session_state.used_q_indices:
+                        st.session_state.used_q_indices.append(current)
+                    
+                    st.success(f"🎙️ Audio answer scored: {score}/10")
+
+            except Exception as e:
+                st.error(f"❌ Error during recording/transcription: {e}")
+
+    # Regular mode (non-selective mutism) - standard text input
+    if not st.session_state.selective_mutism_mode:
+        manual_answer = st.text_area("Edit Your Answer", value=qa.get("user_answer", ""), key=f"user_answer_{current}")
+
+        if st.button("✅ Submit Answer"):
+            st.session_state.all_qas[current]["user_answer"] = manual_answer
+            score = evaluate_answer(qa["question"], qa["answer"], manual_answer)
+            st.session_state.all_qas[current]["score"] = score
+            
+            # Save answer to database
+            if st.session_state.current_conversation_id:
+                # PDF-generated questions
+                questions = db_manager.get_conversation_questions(st.session_state.current_conversation_id)
+                if current < len(questions):
+                    question_id = questions[current]['id']
+                    db_manager.save_user_answer(question_id, manual_answer, score, answer_method='text')
+                    
+                    # Update user progress
+                    db_manager.update_user_progress(current_user['id'], subject)
+            elif st.session_state.current_predefined_session_id:
+                # Predefined questions
+                question_id = qa.get('id')  # Use the question ID from predefined bank
+                if question_id:
+                    db_manager.save_predefined_question_answer(
+                        st.session_state.current_predefined_session_id, 
+                        question_id, 
+                        manual_answer, 
+                        score, 
+                        answer_method='text'
+                    )
+                    
+                    # Update user progress
+                    db_manager.update_user_progress(current_user['id'], subject)
+            
+            # Only add to used indices if not already added
+            if current not in st.session_state.used_q_indices:
+                st.session_state.used_q_indices.append(current)
+                
+            st.success(f"✅ Answer saved and scored: {score}/10")
+            time.sleep(1)  # Short delay to allow user to see the message
+            
+            # Check if session is complete
+            if len(st.session_state.used_q_indices) >= len(st.session_state.all_qas):
+                # Mark session as completed
+                if st.session_state.current_conversation_id:
+                    # Mark PDF conversation as completed
+                    try:
+                        import sqlite3
+                        with sqlite3.connect(db_manager.db_path) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                UPDATE conversations 
+                                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                            """, (st.session_state.current_conversation_id,))
+                            conn.commit()
+                    except Exception as e:
+                        print(f"Error marking conversation complete: {e}")
+                elif st.session_state.current_predefined_session_id:
+                    # Mark predefined question session as completed
+                    try:
+                        import sqlite3
+                        with sqlite3.connect(db_manager.db_path) as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("""
+                                UPDATE predefined_question_sessions 
+                                SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                            """, (st.session_state.current_predefined_session_id,))
+                            conn.commit()
+                    except Exception as e:
+                        print(f"Error marking predefined session complete: {e}")
+                
+                st.info("✅ All questions completed.")
+                st.session_state.session_complete = True
+                total_score = sum(q['score'] for q in st.session_state.all_qas if q.get('score') is not None)
+                max_score = 10 * len(st.session_state.all_qas)
+                st.balloons()
+                
+                # Comprehensive final scoring display
+                display_final_score_report()
+                
+                st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
+            else:
+                if st.session_state.adaptive_mode and not st.session_state.selective_mutism_mode:
+                    # Run adaptive selection based on flowchart logic (not in selective mutism mode)
+                    current_index_before_adaptive = st.session_state.qa_index
+                    
+                    get_next_question_adaptive(score)
+                    
+                    # If adaptive selection changed the index, show a message and rerun
+                    if current_index_before_adaptive != st.session_state.qa_index:
+                        st.info(f"🎯 Adaptive system selected question {st.session_state.qa_index + 1} (Difficulty: {st.session_state.current_difficulty})")
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ No more suitable questions found at current difficulty level.")
+                else:
+                    # Manual mode or selective mutism mode - just proceed to next unanswered question
+                    next_unanswered = next((i for i, q in enumerate(st.session_state.all_qas) 
+                                          if i not in st.session_state.used_q_indices), None)
+                    if next_unanswered is not None:
+                        st.session_state.qa_index = next_unanswered
+                        st.rerun()
 # ------------------ Save Report ------------------
 def save_qa_to_text_file(name, grade, subject, book_title, all_qas):
     output = io.StringIO()
@@ -876,8 +1188,65 @@ def display_final_score_report():
             st.write(f"**{diff_range}:** {len(stats['scores'])} questions, {avg_score:.1f}/10 avg ({percentage:.1f}%)")
             st.progress(percentage / 100)
     
-    # Adaptive learning insights (if applicable)
-    if st.session_state.adaptive_mode and st.session_state.difficulty_path:
+    # Selective Mutism Progress Insights (if applicable)
+    if st.session_state.selective_mutism_mode:
+        st.subheader("🤝 Selective Mutism Progress")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            confidence_stars = "⭐" * st.session_state.confidence_level
+            st.metric(
+                "Confidence Level",
+                f"{confidence_stars} ({st.session_state.confidence_level}/5)",
+                help="Your confidence has grown through successful participation"
+            )
+        
+        with col2:
+            st.metric(
+                "Success Streak",
+                str(st.session_state.success_streak),
+                help="Consecutive good answers (builds confidence)"
+            )
+        
+        with col3:
+            # Count milestones achieved
+            milestones_achieved = len([m for m in st.session_state.sm_progress_milestones if m['type'] == 'confidence_increase'])
+            st.metric(
+                "Confidence Milestones",
+                str(milestones_achieved),
+                help="Times you've leveled up in confidence"
+            )
+        
+        # Encouragement based on progress
+        if st.session_state.confidence_level >= 4:
+            st.success("🌟 Amazing! You've built tremendous confidence. You should be very proud of your progress!")
+        elif st.session_state.confidence_level >= 3:
+            st.success("🎉 Great job! Your confidence is growing strong. Keep up the excellent work!")
+        elif st.session_state.confidence_level >= 2:
+            st.info("😊 You're making good progress! Each question you answer builds your confidence.")
+        else:
+            st.info("🌱 You've taken the first step, and that's wonderful! Every answer helps you grow.")
+        
+        # Progress over time
+        if st.session_state.sm_progress_milestones:
+            st.write("**🎯 Your Confidence Journey:**")
+            for i, milestone in enumerate(st.session_state.sm_progress_milestones, 1):
+                if milestone['type'] == 'confidence_increase':
+                    stars = "⭐" * milestone['level']
+                    st.write(f"Step {i}: Reached confidence level {stars} ({milestone['level']}/5)")
+        
+        # Special message for different input methods used
+        mc_answers = len([q for q in st.session_state.all_qas if q.get('user_answer', '').startswith('Multiple Choice:')])
+        text_answers = answered_questions - mc_answers
+        
+        if mc_answers > 0:
+            st.info(f"🎯 You used multiple choice for {mc_answers} questions - great way to participate!")
+        if text_answers > 0:
+            st.success(f"✍️ You wrote {text_answers} text answers - excellent self-expression!")
+    
+    # Adaptive learning insights (if applicable and not in selective mutism mode)
+    elif st.session_state.adaptive_mode and st.session_state.difficulty_path:
         st.subheader("🧠 Adaptive Learning Insights")
         
         # Calculate learning trajectory
