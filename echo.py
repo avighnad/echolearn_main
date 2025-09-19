@@ -51,6 +51,19 @@ if "current_predefined_session_id" not in st.session_state:
     st.session_state.current_predefined_session_id = None
 if "resume_predefined_session" not in st.session_state:
     st.session_state.resume_predefined_session = False
+# Adaptive learning state variables
+if "adaptive_mode" not in st.session_state:
+    st.session_state.adaptive_mode = True
+if "current_difficulty" not in st.session_state:
+    st.session_state.current_difficulty = 10  # Start at middle difficulty
+if "last_answer_correct" not in st.session_state:
+    st.session_state.last_answer_correct = None
+if "consecutive_wrong_same_level" not in st.session_state:
+    st.session_state.consecutive_wrong_same_level = 0
+if "difficulty_path" not in st.session_state:
+    st.session_state.difficulty_path = []
+if "session_complete" not in st.session_state:
+    st.session_state.session_complete = False
 
 # ------------------ Check for Resume Session ------------------
 if st.session_state.resume_session and st.session_state.current_conversation_id:
@@ -241,66 +254,90 @@ You are an expert examiner. Based on the following content:
 {full_text}
 --- CONTENT END ---
 
-Generate 15 viva questions along with their answers:
-- 5 Easy
-- 5 Moderate
-- 5 Difficult
+Generate 20 viva questions along with their answers across different difficulty levels from 1-20:
+- 5 questions at difficulty level 1-5 (Basic)
+- 5 questions at difficulty level 6-10 (Intermediate) 
+- 5 questions at difficulty level 11-15 (Advanced)
+- 5 questions at difficulty level 16-20 (Expert)
 
 Format exactly like this:
 
-Easy:
-Q1: ...
+Basic (1-5):
+Q1: [Difficulty: 3] ...
 A1: ...
 ...
 
-Moderate:
-Q6: ...
+Intermediate (6-10):
+Q6: [Difficulty: 7] ...
 A6: ...
 ...
 
-Difficult:
-Q11: ...
+Advanced (11-15):
+Q11: [Difficulty: 13] ...
 A11: ...
 ...
+
+Expert (16-20):
+Q16: [Difficulty: 18] ...
+A16: ...
             """
 
             response = llm.invoke(prompt)
             raw_output = response.strip() if isinstance(response, str) else response.content.strip()
 
-            sections = {"Easy": [], "Moderate": [], "Difficult": []}
+            sections = {"Basic": [], "Intermediate": [], "Advanced": [], "Expert": []}
             current_section = None
 
             for line in raw_output.splitlines():
                 line = line.strip()
                 if not line:
                     continue
-                if "Easy" in line:
-                    current_section = "Easy"
-                elif "Moderate" in line:
-                    current_section = "Moderate"
-                elif "Difficult" in line:
-                    current_section = "Difficult"
+                if "Basic" in line:
+                    current_section = "Basic"
+                elif "Intermediate" in line:
+                    current_section = "Intermediate"
+                elif "Advanced" in line:
+                    current_section = "Advanced"
+                elif "Expert" in line:
+                    current_section = "Expert"
                 elif current_section and (line.startswith("Q") or line.startswith("A")):
                     sections[current_section].append(line)
 
             qa_dict = {}
             all_qas = []
+            difficulty_mapping = {"Basic": (1, 5), "Intermediate": (6, 10), "Advanced": (11, 15), "Expert": (16, 20)}
+            
             for level, lines in sections.items():
                 level_qas = []
                 for i in range(0, len(lines), 2):
                     try:
-                        q = lines[i].split(":", 1)[1].strip()
-                        a = lines[i + 1].split(":", 1)[1].strip()
+                        q_line = lines[i]
+                        a_line = lines[i + 1]
+                        
+                        # Extract difficulty from question if specified
+                        import re
+                        difficulty_match = re.search(r'\[Difficulty: (\d+)\]', q_line)
+                        if difficulty_match:
+                            difficulty = int(difficulty_match.group(1))
+                            q = q_line.split(":", 1)[1].replace(f"[Difficulty: {difficulty}]", "").strip()
+                        else:
+                            # Use default difficulty for the section
+                            min_diff, max_diff = difficulty_mapping[level]
+                            difficulty = (min_diff + max_diff) // 2
+                            q = q_line.split(":", 1)[1].strip()
+                        
+                        a = a_line.split(":", 1)[1].strip()
                         qa_item = {
                             "level": level,
                             "question": q,
                             "answer": a,
+                            "difficulty": difficulty,
                             "user_answer": "",
                             "score": None
                         }
                         level_qas.append(qa_item)
                         all_qas.append(qa_item)
-                    except Exception:
+                    except Exception as e:
                         continue
                 qa_dict[level] = level_qas
 
@@ -373,31 +410,101 @@ Evaluate the student's answer strictly and give a score out of 10. Just reply wi
     except Exception:
         return 0
 
-# ------------------ Adaptive Question Selector ------------------
-# ------------------ Adaptive Question Selector ------------------
-def get_next_question(score):
-    if score < 4:
-        level = "Easy"
-    elif score < 7:
-        level = "Moderate"
-    else:
-        level = "Difficult"
-
-    # First try to find a question of the desired level
-    for i, qa in enumerate(st.session_state.all_qas):
-        if qa["level"] == level and i not in st.session_state.used_q_indices:
-            st.session_state.qa_index = i
-            return
+# ------------------ Adaptive Question Logic (Following Flowchart) ------------------
+def get_next_question_adaptive(user_score):
+    """Implements the adaptive logic from the flowchart"""
     
-    # If none found, find any unused question
+    # Determine if answer was correct (score >= 6 considered correct)
+    is_correct = user_score >= 6
+    st.session_state.last_answer_correct = is_correct
+    st.session_state.difficulty_path.append({
+        'difficulty': st.session_state.current_difficulty,
+        'score': user_score,
+        'correct': is_correct,
+        'question_index': st.session_state.qa_index
+    })
+    
+    if is_correct:
+        # Correct answer logic
+        st.session_state.consecutive_wrong_same_level = 0
+        
+        # Move to random question from higher difficulty
+        higher_difficulties = [d for d in range(st.session_state.current_difficulty + 1, 21)]
+        if higher_difficulties:
+            import random
+            st.session_state.current_difficulty = random.choice(higher_difficulties)
+        
+    else:
+        # Wrong answer logic
+        st.session_state.consecutive_wrong_same_level += 1
+        
+        if st.session_state.consecutive_wrong_same_level >= 2:
+            # Two consecutive wrong answers at same level -> drop down difficulty
+            if st.session_state.current_difficulty > 1:
+                st.session_state.current_difficulty = max(1, st.session_state.current_difficulty - 2)
+            st.session_state.consecutive_wrong_same_level = 0
+        # Otherwise stay at same difficulty for another question
+    
+    # Find next question at target difficulty level
+    find_question_by_difficulty(st.session_state.current_difficulty)
+
+def find_question_by_difficulty(target_difficulty):
+    """Find an unused question closest to target difficulty"""
+    
+    # First try exact match
+    for i, qa in enumerate(st.session_state.all_qas):
+        if (i not in st.session_state.used_q_indices and 
+            qa.get('difficulty', get_difficulty_from_level(qa['level'])) == target_difficulty):
+            st.session_state.qa_index = i
+            return True
+    
+    # If no exact match, find closest difficulty
+    best_match = None
+    best_diff = float('inf')
+    
     for i, qa in enumerate(st.session_state.all_qas):
         if i not in st.session_state.used_q_indices:
-            st.session_state.qa_index = i
-            return
+            qa_difficulty = qa.get('difficulty', get_difficulty_from_level(qa['level']))
+            diff = abs(qa_difficulty - target_difficulty)
+            if diff < best_diff:
+                best_diff = diff
+                best_match = i
+    
+    if best_match is not None:
+        st.session_state.qa_index = best_match
+        return True
+    
+    return False
+
+def get_difficulty_from_level(level):
+    """Convert text levels to numeric difficulty for compatibility"""
+    mapping = {
+        'Basic': 3, 'Easy': 3,
+        'Intermediate': 8, 'Moderate': 8, 
+        'Advanced': 13, 'Difficult': 13,
+        'Expert': 18
+    }
+    return mapping.get(level, 10)
 
 # ------------------ Viva UI ------------------
 if st.session_state.all_qas:
     st.subheader("🧠 Viva Questions")
+    
+    # Adaptive Mode Toggle
+    col_adaptive, col_info = st.columns([1, 3])
+    with col_adaptive:
+        adaptive_mode = st.checkbox(
+            "🎯 Adaptive Mode", 
+            value=st.session_state.adaptive_mode,
+            help="Enable intelligent difficulty adjustment based on performance"
+        )
+        if adaptive_mode != st.session_state.adaptive_mode:
+            st.session_state.adaptive_mode = adaptive_mode
+            st.rerun()
+    
+    with col_info:
+        if st.session_state.adaptive_mode:
+            st.caption(f"Current adaptive difficulty: **{st.session_state.current_difficulty}/20** | Consecutive wrong: **{st.session_state.consecutive_wrong_same_level}**")
 
     current = st.session_state.qa_index
     qa = st.session_state.all_qas[current]
@@ -428,9 +535,14 @@ if st.session_state.all_qas:
 
     st.markdown(f"**Q:** {qa['question']}")
     
-    # Show score if already answered
-    if qa['score'] is not None:
-        st.success(f"Scored: {qa['score']}/10")
+        # Show score if already answered
+        if qa['score'] is not None:
+            st.success(f"Scored: {qa['score']}/10")
+            
+        # Show current adaptive difficulty if in adaptive mode
+        if st.session_state.adaptive_mode:
+            current_qa_difficulty = qa.get('difficulty', get_difficulty_from_level(qa['level']))
+            st.info(f"🎯 Current Target Difficulty: {st.session_state.current_difficulty} | This Question: {current_qa_difficulty}")
 
 
     # TTS using pyttsx3
@@ -570,24 +682,35 @@ if st.session_state.all_qas:
                     print(f"Error marking predefined session complete: {e}")
             
             st.info("✅ All questions completed.")
+            st.session_state.session_complete = True
             total_score = sum(q['score'] for q in st.session_state.all_qas if q.get('score') is not None)
             max_score = 10 * len(st.session_state.all_qas)
             st.balloons()
+            
+            # Comprehensive final scoring display
+            display_final_score_report()
+            
             st.success(f"🎉 All questions completed! Total Score: {total_score}/{max_score}")
         else:
-            # Only run adaptive selection if not all questions are answered
-            # Preserve the current index for manual navigation
-            current_index_before_adaptive = st.session_state.qa_index
-            
-            # Run adaptive selection
-            get_next_question(score)
-            
-            # If adaptive selection changed the index, show a message and rerun
-            if current_index_before_adaptive != st.session_state.qa_index:
-                st.info(f"🔀 Adaptive selection moved to question {st.session_state.qa_index + 1}")
-                st.rerun()  # ADDED THIS LINE TO FORCE REFRESH
+            if st.session_state.adaptive_mode:
+                # Run adaptive selection based on flowchart logic
+                current_index_before_adaptive = st.session_state.qa_index
+                
+                get_next_question_adaptive(score)
+                
+                # If adaptive selection changed the index, show a message and rerun
+                if current_index_before_adaptive != st.session_state.qa_index:
+                    st.info(f"🎯 Adaptive system selected question {st.session_state.qa_index + 1} (Difficulty: {st.session_state.current_difficulty})")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ No more suitable questions found at current difficulty level.")
             else:
-                st.warning("⚠️ Couldn't find a suitable next question. Please use navigation buttons.")
+                # Manual mode - just proceed to next unanswered question
+                next_unanswered = next((i for i, q in enumerate(st.session_state.all_qas) 
+                                      if i not in st.session_state.used_q_indices), None)
+                if next_unanswered is not None:
+                    st.session_state.qa_index = next_unanswered
+                    st.rerun()
 # ------------------ Save Report ------------------
 def save_qa_to_text_file(name, grade, subject, book_title, all_qas):
     output = io.StringIO()
@@ -640,6 +763,11 @@ if st.session_state.all_qas:
             col4.metric("Average Score", f"{total_score/answered_questions:.1f}/10")
         else:
             col4.metric("Average Score", "0/10")
+            
+        # Show adaptive learning progress if enabled
+        if st.session_state.adaptive_mode and st.session_state.difficulty_path:
+            st.subheader("🎯 Adaptive Learning Journey")
+            display_adaptive_progress()
     
     # Add option to start new session
     if st.button("🆕 Start New Session"):
@@ -647,9 +775,185 @@ if st.session_state.all_qas:
         keys_to_clear = [
             'current_conversation_id', 'current_predefined_session_id', 
             'pdf_text_dict', 'qa_dict', 'all_qas', 'qa_index', 'used_q_indices', 
-            'resume_session', 'resume_predefined_session', 'question_mode'
+            'resume_session', 'resume_predefined_session', 'question_mode',
+            'adaptive_mode', 'current_difficulty', 'last_answer_correct',
+            'consecutive_wrong_same_level', 'difficulty_path', 'session_complete'
         ]
         for key in keys_to_clear:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
+
+# ------------------ Final Scoring and Analytics ------------------
+def display_final_score_report():
+    """Comprehensive final scoring report with detailed analytics"""
+    st.subheader("🏆 Final Score Report")
+    
+    # Basic statistics
+    total_questions = len(st.session_state.all_qas)
+    answered_questions = len([q for q in st.session_state.all_qas if q.get('score') is not None])
+    total_score = sum(q.get('score', 0) for q in st.session_state.all_qas if q.get('score') is not None)
+    max_possible_score = answered_questions * 10
+    
+    # Performance metrics
+    if answered_questions > 0:
+        average_score = total_score / answered_questions
+        percentage = (total_score / max_possible_score) * 100
+        
+        # Grade classification
+        if percentage >= 90:
+            grade = "A+", "🏅 Outstanding!"
+        elif percentage >= 80:
+            grade = "A", "⭐ Excellent!"
+        elif percentage >= 70:
+            grade = "B", "😊 Good Job!"
+        elif percentage >= 60:
+            grade = "C", "👍 Fair Performance"
+        elif percentage >= 50:
+            grade = "D", "💪 Need Improvement"
+        else:
+            grade = "F", "📚 Keep Studying!"
+    else:
+        average_score = 0
+        percentage = 0
+        grade = "N/A", "No questions answered"
+    
+    # Display main metrics
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            label="🎯 Overall Score",
+            value=f"{total_score}/{max_possible_score}",
+            delta=f"{percentage:.1f}%"
+        )
+    
+    with col2:
+        st.metric(
+            label="📊 Average per Question",
+            value=f"{average_score:.1f}/10",
+            delta=f"{(average_score/10)*100:.0f}%"
+        )
+    
+    with col3:
+        st.metric(
+            label="🏅 Final Grade",
+            value=grade[0],
+            delta=grade[1]
+        )
+    
+    # Difficulty distribution analysis
+    if st.session_state.all_qas:
+        st.subheader("📈 Performance by Difficulty")
+        
+        difficulty_stats = {}
+        for qa in st.session_state.all_qas:
+            if qa.get('score') is not None:
+                difficulty = qa.get('difficulty', get_difficulty_from_level(qa.get('level', 'Basic')))
+                
+                # Group into ranges
+                if difficulty <= 5:
+                    diff_range = "1-5 (Basic)"
+                elif difficulty <= 10:
+                    diff_range = "6-10 (Intermediate)"
+                elif difficulty <= 15:
+                    diff_range = "11-15 (Advanced)"
+                else:
+                    diff_range = "16-20 (Expert)"
+                
+                if diff_range not in difficulty_stats:
+                    difficulty_stats[diff_range] = {'scores': [], 'total': 0, 'max': 0}
+                
+                difficulty_stats[diff_range]['scores'].append(qa['score'])
+                difficulty_stats[diff_range]['total'] += qa['score']
+                difficulty_stats[diff_range]['max'] += 10
+        
+        # Display difficulty performance
+        for diff_range, stats in difficulty_stats.items():
+            avg_score = sum(stats['scores']) / len(stats['scores']) if stats['scores'] else 0
+            percentage = (stats['total'] / stats['max']) * 100 if stats['max'] > 0 else 0
+            
+            st.write(f"**{diff_range}:** {len(stats['scores'])} questions, {avg_score:.1f}/10 avg ({percentage:.1f}%)")
+            st.progress(percentage / 100)
+    
+    # Adaptive learning insights (if applicable)
+    if st.session_state.adaptive_mode and st.session_state.difficulty_path:
+        st.subheader("🧠 Adaptive Learning Insights")
+        
+        # Calculate learning trajectory
+        initial_difficulty = st.session_state.difficulty_path[0]['difficulty']
+        final_difficulty = st.session_state.current_difficulty
+        difficulty_change = final_difficulty - initial_difficulty
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric(
+                "Starting Difficulty",
+                f"{initial_difficulty}/20",
+                help="Difficulty level of first question"
+            )
+        
+        with col2:
+            st.metric(
+                "Final Difficulty", 
+                f"{final_difficulty}/20",
+                delta=f"{difficulty_change:+d}"
+            )
+        
+        with col3:
+            correct_answers = sum(1 for step in st.session_state.difficulty_path if step['correct'])
+            accuracy = (correct_answers / len(st.session_state.difficulty_path)) * 100 if st.session_state.difficulty_path else 0
+            st.metric(
+                "Accuracy Rate",
+                f"{accuracy:.1f}%",
+                delta=f"{correct_answers}/{len(st.session_state.difficulty_path)}"
+            )
+        
+        # Learning trajectory chart
+        if len(st.session_state.difficulty_path) > 1:
+            st.write("**📈 Learning Trajectory:**")
+            
+            difficulty_progression = [step['difficulty'] for step in st.session_state.difficulty_path]
+            scores_progression = [step['score'] for step in st.session_state.difficulty_path]
+            
+            import pandas as pd
+            
+            df = pd.DataFrame({
+                'Question': range(1, len(difficulty_progression) + 1),
+                'Difficulty Level': difficulty_progression,
+                'Score': scores_progression
+            })
+            
+            st.line_chart(df.set_index('Question'))
+            
+            # Performance insights
+            if difficulty_change > 0:
+                st.success(f"🚀 Great progress! You advanced {difficulty_change} difficulty levels.")
+            elif difficulty_change == 0:
+                st.info("🎯 You maintained a consistent difficulty level throughout the session.")
+            else:
+                st.info(f"📚 The system adapted to your learning pace, focusing on foundational concepts.")
+
+def display_adaptive_progress():
+    """Display adaptive learning progress visualization"""
+    if not st.session_state.difficulty_path:
+        return
+    
+    # Show recent difficulty changes
+    recent_steps = st.session_state.difficulty_path[-5:] if len(st.session_state.difficulty_path) > 5 else st.session_state.difficulty_path
+    
+    st.write("**Recent Progress:**")
+    for i, step in enumerate(recent_steps, 1):
+        status = "✅" if step['correct'] else "❌"
+        st.write(f"{status} Q{step['question_index']+1}: Difficulty {step['difficulty']} → Score {step['score']}/10")
+    
+    # Show difficulty trend
+    if len(st.session_state.difficulty_path) >= 3:
+        recent_difficulties = [step['difficulty'] for step in st.session_state.difficulty_path[-3:]]
+        if recent_difficulties[-1] > recent_difficulties[0]:
+            st.success("📈 Trending upward in difficulty!")
+        elif recent_difficulties[-1] < recent_difficulties[0]:
+            st.info("📉 Focusing on strengthening fundamentals")
+        else:
+            st.info("🎯 Maintaining consistent challenge level")
