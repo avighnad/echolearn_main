@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import fitz  # PyMuPDF
 from langchain.llms import OpenAI
@@ -682,14 +683,14 @@ if st.session_state.all_qas:
 
     st.markdown(f"**Q:** {qa['question']}")
     
-        # Show score if already answered
-        if qa['score'] is not None:
-            st.success(f"Scored: {qa['score']}/10")
-            
-        # Show current adaptive difficulty if in adaptive mode
-        if st.session_state.adaptive_mode:
-            current_qa_difficulty = qa.get('difficulty', get_difficulty_from_level(qa['level']))
-            st.info(f"🎯 Current Target Difficulty: {st.session_state.current_difficulty} | This Question: {current_qa_difficulty}")
+    # Show score if already answered
+    if qa['score'] is not None:
+        st.success(f"Scored: {qa['score']}/10")
+        
+    # Show current adaptive difficulty if in adaptive mode
+    if st.session_state.adaptive_mode:
+        current_qa_difficulty = qa.get('difficulty', get_difficulty_from_level(qa['level']))
+        st.info(f"🎯 Current Target Difficulty: {st.session_state.current_difficulty} | This Question: {current_qa_difficulty}")
 
 
     # TTS using pyttsx3 - always available as it helps with comprehension
