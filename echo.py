@@ -16,7 +16,7 @@ from database import db_manager
 
 # ------------------ Load API & Init Model ------------------
 load_dotenv()
-openai_api_key = "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"
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
 
@@ -1327,4 +1327,5 @@ def display_adaptive_progress():
             st.info("📉 Focusing on strengthening fundamentals")
         else:
             st.info("🎯 Maintaining consistent challenge level")
+
 
