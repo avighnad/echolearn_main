@@ -160,7 +160,15 @@ else:
         subject = st.text_input("Subject : ")
         book_title = st.text_input("Book Title : ")
     else:
-        # Predefined Questions Mode
+        # Predefined Questions Mode - Initialize all variables first
+        subject_id = None
+        topic_id = None
+        difficulty_min = 1.0
+        difficulty_max = 100.0
+        subject = ""
+        grade = ""
+        book_title = ""
+        
         subjects = db_manager.get_subjects()
         
         if subjects:
@@ -211,9 +219,6 @@ else:
                 book_title = f"Predefined Questions - {selected_subject}"
         else:
             st.error("No subjects found in the question bank. Please contact administrator.")
-            subject = ""
-            grade = ""
-            book_title = ""
 
 # ------------------ PDF Upload (only for PDF mode) ------------------
 if st.session_state.question_mode == "PDF Upload":
@@ -373,16 +378,32 @@ elif st.session_state.question_mode == "Predefined Questions":
     
     # Start predefined question session button
     if st.button("🚀 Start Question Session"):
-        if name and grade and subject and 'subject_id' in locals() and subject_id:
+        # Detailed validation with specific error messages
+        validation_errors = []
+        
+        if not name or name.strip() == "":
+            validation_errors.append("Name is required")
+        if not grade or grade.strip() == "":
+            validation_errors.append("Grade is required")
+        if not subject or subject.strip() == "":
+            validation_errors.append("Subject is required")
+        if not subject_id:
+            validation_errors.append("Please select a valid subject")
+        
+        if validation_errors:
+            st.error("❌ **Please fix the following issues:**")
+            for error in validation_errors:
+                st.error(f"   • {error}")
+        else:
             try:
                 session_id = db_manager.create_predefined_question_session(
                     user_id=current_user['id'],
                     name=name,
                     grade=grade,
                     subject_id=subject_id,
-                    topic_id=topic_id if 'topic_id' in locals() else None,
-                    difficulty_min=difficulty_min if 'difficulty_min' in locals() else 1.0,
-                    difficulty_max=difficulty_max if 'difficulty_max' in locals() else 100.0
+                    topic_id=topic_id,
+                    difficulty_min=difficulty_min,
+                    difficulty_max=difficulty_max
                 )
                 
                 st.session_state.current_predefined_session_id = session_id
@@ -398,8 +419,6 @@ elif st.session_state.question_mode == "Predefined Questions":
                 
             except Exception as e:
                 st.error(f"Error creating question session: {str(e)}")
-        else:
-            st.error("Please fill in all required fields and select valid options.")
 
 # ------------------ Answer Evaluation ------------------
 def evaluate_answer(question, correct_answer, user_answer):
