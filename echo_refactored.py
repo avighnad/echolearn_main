@@ -23,7 +23,7 @@ from audio_lab import audio_lab
 
 # ------------------ Load API & Init Model ------------------
 load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = st.secrets["apikey"]
 
 llm = OpenAI(openai_api_key=openai_api_key, temperature=0)
 
