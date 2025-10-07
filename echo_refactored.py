@@ -143,6 +143,9 @@ def handle_resume_sessions():
 # ------------------ Main Application Logic ------------------
 def main():
     """Main application logic"""
+    # Get current user within the function
+    current_user = auth_manager.get_current_user()
+    
     # Handle resume sessions
     name, grade, subject, book_title = handle_resume_sessions()
     
@@ -164,14 +167,26 @@ def main():
         
         # ------------------ Input Fields ------------------
         st.subheader("📝 Start New Study Session")
-        name = st.text_input("Name : ", value=current_user.get('full_name', current_user['username']))
+        # Handle case where current_user might be None
+        default_name = ""
+        if current_user:
+            default_name = current_user.get('full_name', current_user.get('username', ''))
+        name = st.text_input("Name : ", value=default_name)
         
         if question_mode == "PDF Upload":
             grade = st.text_input("Grade : ")
             subject = st.text_input("Subject : ")
             book_title = st.text_input("Book Title : ")
         else:
-            # Predefined Questions Mode
+            # Predefined Questions Mode - Initialize all variables first
+            subject_id = None
+            topic_id = None
+            difficulty_min = 1.0
+            difficulty_max = 100.0
+            subject = ""
+            grade = ""
+            book_title = ""
+            
             subjects = db_manager.get_subjects()
             
             if subjects:
@@ -222,9 +237,6 @@ def main():
                     book_title = f"Predefined Questions - {selected_subject}"
             else:
                 st.error("No subjects found in the question bank. Please contact administrator.")
-                subject = ""
-                grade = ""
-                book_title = ""
     
     # ------------------ PDF Upload (only for PDF mode) ------------------
     if st.session_state.question_mode == "PDF Upload":
@@ -232,7 +244,15 @@ def main():
     
     # ------------------ Predefined Questions Mode ------------------
     elif st.session_state.question_mode == "Predefined Questions":
-        handle_predefined_questions(name, grade, subject, book_title)
+        # Pass all required variables to the function
+        predefined_vars = {
+            'subject_id': locals().get('subject_id'),
+            'topic_id': locals().get('topic_id'),
+            'difficulty_min': locals().get('difficulty_min', 1.0),
+            'difficulty_max': locals().get('difficulty_max', 100.0),
+            'current_user': current_user
+        }
+        handle_predefined_questions(name, grade, subject, book_title, predefined_vars)
     
     # ------------------ Viva Questions Interface ------------------
     if st.session_state.all_qas:
@@ -306,22 +326,47 @@ def handle_pdf_upload(name, grade, subject, book_title):
             else:
                 st.error("Failed to generate valid questions. Please try again.")
 
-def handle_predefined_questions(name, grade, subject, book_title):
+def handle_predefined_questions(name, grade, subject, book_title, predefined_vars):
     """Handle predefined questions mode"""
     st.header("📋 Predefined Question Bank")
     
+    # Extract variables from the passed dictionary
+    subject_id = predefined_vars.get('subject_id')
+    topic_id = predefined_vars.get('topic_id')
+    difficulty_min = predefined_vars.get('difficulty_min', 1.0)
+    difficulty_max = predefined_vars.get('difficulty_max', 100.0)
+    current_user = predefined_vars.get('current_user')
+    
     # Start predefined question session button
     if st.button("🚀 Start Question Session"):
-        if name and grade and subject and 'subject_id' in locals() and subject_id:
+        # Detailed validation with specific error messages
+        validation_errors = []
+        
+        if not name or name.strip() == "":
+            validation_errors.append("Name is required")
+        if not grade or grade.strip() == "":
+            validation_errors.append("Grade is required")
+        if not subject or subject.strip() == "":
+            validation_errors.append("Subject is required")
+        if not subject_id:
+            validation_errors.append("Please select a valid subject")
+        if not current_user:
+            validation_errors.append("User authentication required")
+        
+        if validation_errors:
+            st.error("❌ **Please fix the following issues:**")
+            for error in validation_errors:
+                st.error(f"   • {error}")
+        else:
             try:
                 session_id = db_manager.create_predefined_question_session(
                     user_id=current_user['id'],
                     name=name,
                     grade=grade,
                     subject_id=subject_id,
-                    topic_id=topic_id if 'topic_id' in locals() else None,
-                    difficulty_min=difficulty_min if 'difficulty_min' in locals() else 1.0,
-                    difficulty_max=difficulty_max if 'difficulty_max' in locals() else 100.0
+                    topic_id=topic_id,
+                    difficulty_min=difficulty_min,
+                    difficulty_max=difficulty_max
                 )
                 
                 st.session_state.current_predefined_session_id = session_id
@@ -337,8 +382,6 @@ def handle_predefined_questions(name, grade, subject, book_title):
                 
             except Exception as e:
                 st.error(f"Error creating question session: {str(e)}")
-        else:
-            st.error("Please fill in all required fields and select valid options.")
 
 def handle_viva_interface(name, grade, subject, book_title):
     """Handle the main viva questions interface"""
