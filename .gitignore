@@ -1,1 +1,189 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.env
+.venv
+echolearn/echolearn_env/
+echolearn_env/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Audio files and recordings
+audio_recordings/
+ml_audio_data/
+recorded_audio.wav
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+echolearn.db
+
+# Environment variables and secrets
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+config.ini
+secrets.json
+
+# API Keys and configuration files
+openai_api_key.txt
+api_keys.txt
+*.key
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows specific
+desktop.ini
+$RECYCLE.BIN/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Streamlit
+.streamlit/
+
+# Machine Learning / Data files
+*.pkl
+*.pickle
+*.joblib
+*.model
+*.h5
+*.hdf5
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# PDF files (if they contain sensitive content)
+# Uncomment the next line if you don't want to track PDFs
+# *.pdf
+
+# Text files with sensitive data
+passwords.txt
+users.txt
+
+# Cache directories
+.cache/
+__pycache__/
+.pytest_cache/
+
+# Node modules (if any frontend components are added)
+node_modules/
+
+# Package files
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Backup files
+*.bak
+*.backup
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json

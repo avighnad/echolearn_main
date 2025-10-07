@@ -19,6 +19,7 @@ from ui_components import UIComponents
 from question_manager import QuestionManager
 from adaptive_learning import AdaptiveLearningEngine
 from selective_mutism_support import SelectiveMutismSupport
+from audio_lab import audio_lab
 
 # ------------------ Load API & Init Model ------------------
 load_dotenv()
@@ -157,10 +158,10 @@ def main():
         st.subheader("📚 Choose Learning Mode")
         question_mode = st.radio(
             "Select how you want to practice:",
-            ["PDF Upload", "Predefined Questions"],
-            index=0 if st.session_state.question_mode == "PDF Upload" else 1,
+            ["PDF Upload", "Predefined Questions", "Audio Training Lab"],
+            index=0 if st.session_state.question_mode == "PDF Upload" else (1 if st.session_state.question_mode == "Predefined Questions" else 2),
             horizontal=True,
-            help="PDF Upload: Generate questions from your own textbook. Predefined Questions: Practice with curated questions from our question bank."
+            help="PDF Upload: Generate questions from your own textbook. Predefined Questions: Practice with curated questions from our question bank. Audio Training Lab: Record and analyze audio for ML training."
         )
         
         st.session_state.question_mode = question_mode
@@ -177,6 +178,11 @@ def main():
             grade = st.text_input("Grade : ")
             subject = st.text_input("Subject : ")
             book_title = st.text_input("Book Title : ")
+        elif question_mode == "Audio Training Lab":
+            # Audio Lab doesn't need grade/subject input
+            grade = "N/A"
+            subject = "Audio Training"
+            book_title = "Audio Training Lab"
         else:
             # Predefined Questions Mode - Initialize all variables first
             subject_id = None
@@ -253,6 +259,10 @@ def main():
             'current_user': current_user
         }
         handle_predefined_questions(name, grade, subject, book_title, predefined_vars)
+    
+    # ------------------ Audio Training Lab Mode ------------------
+    elif st.session_state.question_mode == "Audio Training Lab":
+        handle_audio_training_lab()
     
     # ------------------ Viva Questions Interface ------------------
     if st.session_state.all_qas:
@@ -382,6 +392,10 @@ def handle_predefined_questions(name, grade, subject, book_title, predefined_var
                 
             except Exception as e:
                 st.error(f"Error creating question session: {str(e)}")
+
+def handle_audio_training_lab():
+    """Handle the Audio Training Lab interface"""
+    audio_lab.display_audio_lab_interface()
 
 def handle_viva_interface(name, grade, subject, book_title):
     """Handle the main viva questions interface"""
