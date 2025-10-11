@@ -1,8 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-Audio Training Laboratory Module for EchoLearn
-Handles audio recording, processing, and visualization for ML training data
-"""
+
 
 import streamlit as st
 import numpy as np
@@ -30,8 +26,9 @@ class AudioTrainingLab:
         self.dtype = 'float32'
         self.recordings_dir = Path("audio_recordings")
         self.recordings_dir.mkdir(exist_ok=True)
-        
-        # Initialize session state for audio lab
+    
+    def initialize_session_state(self):
+        """Initialize session state variables for audio lab"""
         if 'audio_lab_recordings' not in st.session_state:
             st.session_state.audio_lab_recordings = []
         if 'current_recording' not in st.session_state:
@@ -41,6 +38,9 @@ class AudioTrainingLab:
     
     def display_audio_lab_interface(self):
         """Main interface for the Audio Training Lab"""
+        # Initialize session state first
+        self.initialize_session_state()
+        
         st.header("🎙️ Audio Training Laboratory")
         st.markdown("**Collect and analyze audio data for machine learning model training**")
         
